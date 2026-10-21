@@ -11,6 +11,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
+from code_processor import process_file
+
+
 
 # Load optional GitHub credentials from .env
 load_dotenv()
@@ -621,51 +624,70 @@ def get_repository_snapshot(
     }
 
 
+
+def process_repository(snapshot, chunk_size=1000, chunk_overlap=150):
+    repository = snapshot.get("repository", {})
+
+    repository_name = (
+        repository.get("full_name")
+        or f"{repository.get('owner', 'unknown')}/"
+           f"{repository.get('name', 'unknown')}"
+    )
+
+    all_documents = []
+
+    for file_path, content in snapshot.get("files", {}).items():
+        documents = process_file(
+            file_path=file_path,
+            content=content,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
+        for document in documents:
+            document.metadata["repository"] = repository_name
+            document.metadata["branch"] = repository.get("default_branch")
+
+        all_documents.extend(documents)
+
+    return all_documents
+
+
+
 # --------------------------------------------------
 # 16. LOCAL TEST
 # --------------------------------------------------
 
+
 if __name__ == "__main__":
+    sample_snapshot = {
+        "repository": {
+            "owner": "demo-user",
+            "name": "demo-repo",
+            "default_branch": "main",
+        },
+        "files": {
+            "src/main.py": (
+                "def greet(name):\n"
+                "    return f'Hello, {name}'\n\n"
+                "def add(a, b):\n"
+                "    return a + b\n"
+            ),
+            "src/utils.py": (
+                "def multiply(a, b):\n"
+                "    return a * b\n"
+            ),
+        },
+    }
 
-    github_url = "https://github.com/KRISHNA07MISHRA/shopshere-backend"
+    documents = process_repository(
+        sample_snapshot,
+        chunk_size=100,
+        chunk_overlap=15,
+    )
 
-    try:
-        snapshot = get_repository_snapshot(
-            github_url,
-            max_files=10,
-            max_file_bytes=MAX_FILE_BYTES
-        )
+    print("Total chunks:", len(documents))
 
-        repository = snapshot["repository"]
-
-        print("\nREPOSITORY")
-        print("Name:", repository["name"])
-        print("Owner:", repository["owner"])
-        print("Default branch:", repository["default_branch"])
-        print("Language:", repository["language"])
-        print("Stars:", repository["stars"])
-
-        print("\nINGESTION SUMMARY")
-        print("Relevant paths:", len(snapshot["relevant_file_paths"]))
-        print("Fetched files:", len(snapshot["files"]))
-        print("Skipped files:", len(snapshot["skipped"]))
-        print("Errors:", len(snapshot["errors"]))
-        print("Not processed:", len(snapshot["not_processed"]))
-        print("Tree truncated:", snapshot["tree_truncated"])
-
-        for path, content in snapshot["files"].items():
-            print(f"\n--- {path} ---")
-            print(content[:300])
-
-        if snapshot["skipped"]:
-            print("\nSKIPPED FILES")
-            for item in snapshot["skipped"]:
-                print(item)
-
-        if snapshot["errors"]:
-            print("\nERRORS")
-            for item in snapshot["errors"]:
-                print(item)
-
-    except (GitHubClientError, ValueError) as error:
-        print(f"RepoMind ingestion failed: {error}")
+    for document in documents:
+        print("\nMetadata:", document.metadata)
+        print(document.page_content)

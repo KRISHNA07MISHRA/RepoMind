@@ -1,45 +1,121 @@
 
-def chunk_file(file_path, content, chunk_size=40, overlap=5):
-    """
-    Split a source file into line-based chunks.
+from pathlib import PurePosixPath
 
-    Args:
-        file_path: Repository-relative path of the file.
-        content: Complete text content of the file.
-        chunk_size: Maximum lines in each chunk.
-        overlap: Number of lines shared between consecutive chunks.
+from langchain_text_splitters import (
+    Language,
+    RecursiveCharacterTextSplitter,
+)
 
-    Returns:
-        A list of chunks with source path and line numbers.
-    """
+
+# Map file extensions to LangChain's supported languages.
+LANGUAGE_MAP = {
+    ".py": Language.PYTHON,
+    ".java": Language.JAVA,
+    ".js": Language.JS,
+    ".jsx": Language.JS,
+    ".ts": Language.TS,
+    ".tsx": Language.TS,
+    ".cpp": Language.CPP,
+    ".c": Language.C,
+    ".h": Language.C,
+    ".hpp": Language.CPP,
+    ".html": Language.HTML,
+    ".md": Language.MARKDOWN,
+    ".php": Language.PHP,
+    ".go": Language.GO,
+    ".rs": Language.RUST,
+    ".rb": Language.RUBY,
+}
+
+
+def get_text_splitter(file_path, chunk_size=1000, chunk_overlap=150):
+    """Choose a LangChain splitter based on the file extension."""
 
     if chunk_size <= 0:
         raise ValueError("chunk_size must be greater than zero.")
 
-    if overlap < 0 or overlap >= chunk_size:
+    if chunk_overlap < 0 or chunk_overlap >= chunk_size:
         raise ValueError(
-            "overlap must be non-negative and smaller than chunk_size."
+            "chunk_overlap must be non-negative "
+            "and smaller than chunk_size."
         )
 
-    lines = content.splitlines()
-    chunks = []
-    start = 0
+    extension = PurePosixPath(file_path).suffix.lower()
+    language = LANGUAGE_MAP.get(extension)
 
-    while start < len(lines):
-        end = min(start + chunk_size, len(lines))
+    options = {
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "add_start_index": True,
+    }
 
-        chunk_text = "\n".join(lines[start:end])
+    if language is not None:
+        return RecursiveCharacterTextSplitter.from_language(
+            language=language,
+            **options,
+        )
 
-        chunks.append({
-            "file_path": file_path,
-            "start_line": start + 1,
-            "end_line": end,
-            "content": chunk_text
+    # Fallback for JSON, YAML, CSS, text and unsupported extensions.
+    return RecursiveCharacterTextSplitter(**options)
+
+
+def process_file(file_path, content, chunk_size=1000, chunk_overlap=150):
+    """
+    Convert a repository file into LangChain Documents.
+
+    Each Document stores its file path, chunk index and source line range.
+    """
+
+    if not isinstance(content, str):
+        raise TypeError("File content must be a string.")
+
+    if not content.strip():
+        return []
+
+    splitter = get_text_splitter(
+        file_path,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+
+    documents = splitter.create_documents(
+        texts=[content],
+        metadatas=[{"file_path": file_path}],
+    )
+
+    for index, document in enumerate(documents):
+        start_index = document.metadata.get("start_index", 0)
+
+        start_line = content.count("\n", 0, start_index) + 1
+        end_line = start_line + document.page_content.count("\n")
+
+        document.metadata.update({
+            "chunk_index": index,
+            "start_line": start_line,
+            "end_line": end_line,
         })
 
-        if end == len(lines):
-            break
+    return documents
 
-        start = end - overlap
 
-    return chunks
+
+if __name__ == "__main__":
+    from github_client import get_repository_snapshot, process_repository
+
+    github_url = "https://github.com/psf/requests"
+
+    snapshot = get_repository_snapshot(
+        github_url,
+        max_files=10,
+    )
+
+    documents = process_repository(snapshot)
+
+    print("\nRepository:", snapshot["repository"]["name"])
+    print("Fetched files:", len(snapshot["files"]))
+    print("Total chunks:", len(documents))
+    print("Fetch errors:", len(snapshot.get("errors", [])))
+
+    for document in documents[:3]:
+        print("\nMetadata:", document.metadata)
+        print(document.page_content[:300])
