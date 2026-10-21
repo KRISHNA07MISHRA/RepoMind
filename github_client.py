@@ -15,6 +15,7 @@ from code_processor import process_file
 
 
 
+
 # Load optional GitHub credentials from .env
 load_dotenv()
 
@@ -391,6 +392,7 @@ def should_include_file(file_path):
 # 12. GET RELEVANT FILE PATHS
 # --------------------------------------------------
 
+
 def get_relevant_files(owner, repo, branch=None, tree=None):
     """
     Filter the repository tree and return relevant file paths.
@@ -413,6 +415,13 @@ def get_relevant_files(owner, repo, branch=None, tree=None):
 
         if should_include_file(file_path):
             relevant_files.append(file_path)
+
+    relevant_files.sort(
+        key=lambda file_path: (
+            get_file_priority(file_path),
+            file_path.lower(),
+        )
+    )
 
     return relevant_files
 
@@ -651,6 +660,52 @@ def process_repository(snapshot, chunk_size=1000, chunk_overlap=150):
         all_documents.extend(documents)
 
     return all_documents
+
+
+def get_file_priority(file_path):
+    path = PurePosixPath(file_path)
+    parts = path.parts
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+
+    # Highest priority: implementation code in common source directories
+    source_dirs = {
+        "src", "app", "lib", "services",
+        "controllers", "models", "routes",
+    }
+
+    if suffix in ALLOWED_EXTENSIONS and any(
+        part.lower() in source_dirs for part in parts[:-1]
+    ):
+        return 0
+
+    # Other implementation files
+    if suffix in ALLOWED_EXTENSIONS and suffix not in {
+        ".md", ".txt", ".yml", ".yaml"
+    }:
+        return 1
+
+    # Main project configuration files
+    if name in {
+        "pyproject.toml", "requirements.txt",
+        "setup.py", "setup.cfg", "pom.xml",
+        "build.gradle", "package.json",
+    }:
+        return 2
+
+    # Main README documentation
+    if name.startswith("readme"):
+        return 3
+
+    # Other documentation
+    if suffix in {".md", ".txt"}:
+        return 4
+
+    # Repository metadata and miscellaneous files
+    if ".github" in {part.lower() for part in parts}:
+        return 5
+
+    return 6
 
 
 
